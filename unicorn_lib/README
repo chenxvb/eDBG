@@ -1,0 +1,4 @@
+Place the Unicorn static library (libunicorn.a) for Android ARM64 here.
+
+Build with the same cmake command as in ../unicorn_include/README,
+then copy build/libunicorn.a here.

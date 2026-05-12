@@ -247,6 +247,8 @@ func (this *Client) executeCommand(line string) {
 		this.HandleSet(args)
 	case "write", "w":
 		this.HandleWrite(args)
+	case "trace", "tr":
+		this.HandleTrace(args)
 	default:
 		fmt.Println("Unknown command:", cmd)
 	}
@@ -284,6 +286,7 @@ func (this *Client) completer(d prompt.Document) []prompt.Suggest {
 		{Text: "examine", Description: "Examine memory [x]"},
 		{Text: "finish", Description: "Execute until function return [fi]"},
 		{Text: "write", Description: "Write memory"},
+		{Text: "trace", Description: "Unicorn trace emulation to address [tr]"},
 		{Text: "backtrace1", Description: "Show the current stack frame (call stack) [bt1]"},
 		{Text: "backtrace", Description: "Show the current stack frame (call stack) [bt]"},
 	}
@@ -726,7 +729,10 @@ func (this *Client) ParseUserAddressToAbsolute(arg string) (uint64, error) {
 			offset_str := arg[lastIndex+1:]
 			offset, err := strconv.ParseUint(offset_str, 0, 64)
 			if err != nil {
-				return 0, fmt.Errorf("Bad address: %v", err)
+				offset, err = strconv.ParseUint(offset_str, 16, 64)
+				if err != nil {
+					return 0, fmt.Errorf("Bad address: %v", err)
+				}
 			}
 			if libName == "$" {
 				return this.Process.Context.PC + offset*4, nil
@@ -758,7 +764,10 @@ func (this *Client) ParseUserAddress(arg string) (*controller.Address, error) {
 			offset_str := arg[lastIndex+1:]
 			offset, err := strconv.ParseUint(offset_str, 0, 64)
 			if err != nil {
-				return &controller.Address{}, fmt.Errorf("Bad address: %v", err)
+				offset, err = strconv.ParseUint(offset_str, 16, 64)
+				if err != nil {
+					return &controller.Address{}, fmt.Errorf("Bad address: %v", err)
+				}
 			}
 			if libName == "$" {
 				address, err := this.Process.ParseAddress(this.Process.Context.PC + offset*4)

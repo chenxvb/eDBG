@@ -1,0 +1,17 @@
+Place Unicorn Engine C headers here.
+
+Required files:
+  unicorn/unicorn.h
+  unicorn/arm64.h
+  unicorn/platform.h (and other includes)
+
+Build Unicorn for Android ARM64:
+  git clone https://github.com/unicorn-engine/unicorn.git
+  cd unicorn
+  mkdir build && cd build
+  cmake .. -DCMAKE_TOOLCHAIN_FILE=$NDK_ROOT/build/cmake/android.toolchain.cmake \
+           -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 \
+           -DUNICORN_BUILD_SHARED=OFF
+  make -j$(nproc)
+
+Then copy include/unicorn/*.h into this directory.
