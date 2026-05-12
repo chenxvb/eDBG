@@ -187,7 +187,14 @@
 
 2. 下载 NDK 并解压，修改 build_arm.sh 中的 NDK_ROOT
 
-3. 编译
+3. 准备 Unicorn 静态库（`trace` 功能编译必需）
+
+   > `unicorn_lib/libunicorn.a` 体积较大（超过 GitHub 单文件 100MB 限制），不会直接随仓库分发。若缺少该文件，`go build` 会在链接阶段失败。
+
+   - 方式 A（推荐）：从发布页下载并放到 `unicorn_lib/libunicorn.a`
+   - 方式 B：自行编译 Unicorn（Android ARM64）后复制 `build/libunicorn.a` 到 `unicorn_lib/libunicorn.a`
+
+4. 编译
 
    ```shell
    git clone --recursive https://github.com/ShinoLeah/eDBG.git

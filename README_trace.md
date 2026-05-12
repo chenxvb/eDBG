@@ -191,7 +191,40 @@ Trace END!
 ### 依赖
 
 - Android NDK（aarch64-linux-android29 toolchain）
-- Unicorn Engine（已内置编译好的静态库）
+- Unicorn 静态库：`unicorn_lib/libunicorn.a`（必需）
+
+### `libunicorn.a` 下载与准备
+
+`trace` 功能通过 cgo 链接 `unicorn_lib/libunicorn.a`。  
+该文件体积较大（超过 GitHub 单文件 100MB 限制），不会直接随仓库分发，编译前需要手动准备。
+
+#### 方式 1：从 Release 下载（推荐）
+
+1. 打开发布页
+2. 下载发布附件中的 ARM64 Unicorn 静态库（`libunicorn.a`）
+3. 放到仓库路径：`unicorn_lib/libunicorn.a`
+
+#### 方式 2：自行编译 Unicorn 并拷贝
+
+```bash
+export NDK_ROOT=/path/to/android-ndk
+git clone https://github.com/unicorn-engine/unicorn.git
+cd unicorn
+mkdir build && cd build
+cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE=$NDK_ROOT/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-29 \
+  -DUNICORN_BUILD_SHARED=OFF
+make -j8
+cp libunicorn.a /path/to/eDBG/unicorn_lib/libunicorn.a
+```
+
+可用以下命令确认文件已就位：
+
+```bash
+ls -lh unicorn_lib/libunicorn.a
+```
 
 ### 编译
 
