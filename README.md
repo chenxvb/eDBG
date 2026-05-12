@@ -20,6 +20,7 @@
 - 支持常规调试功能（详见“命令详情”）
 - 使用类似 [pwndbg](https://github.com/pwndbg/pwndbg) 的 CLI 界面和类似 GDB 的交互方式，简单易上手
 - 基于文件+偏移的断点注册机制，可以快速启动，支持多线程或多进程调试。
+- 内置 Unicorn Trace（`trace / tr`），可对 ARM64 代码做指令级模拟并导出 Tenet 兼容日志。
 - 支持 mcp 模式，赋予 LLM 基本不需要过反调试的稳定的动态分析能力。
 
 ## 💕 演示
@@ -98,9 +99,30 @@
   - `info register/reg/r`：查看所有寄存器信息。
   - `info thread/t`：列出当前所有线程和已设定的线程过滤器。
   - `info file/f`：打印指定文件的地址和偏移。
+- **Unicorn Trace** `trace / tr`：从当前断点状态启动 Unicorn 模拟执行，支持导出 `uc.log` 与 `tenet.log`
 - **重复上一条指令**：直接回车
 
 更多命令见“进阶使用”
+
+## 🧪 Unicorn Trace
+
+eDBG 支持在断点停住后，基于当前寄存器和内存状态启动 Unicorn 引擎做指令级模拟执行。
+
+- 命令：`trace <end_addr> [output_path] [--tenet] [--bound <start> <end>]`
+- 简写：`tr`
+- 典型用途：快速生成可回放的执行日志，用于配合 Tenet/IDA 进行动态分析
+
+示例：
+
+```shell
+(eDBG) b libxxx.so+0x1234
+(eDBG) c
+(eDBG) trace 0x7abc5678 ./trace_out --tenet
+```
+
+完整参数、输出格式与多轮同步机制说明见：
+
+- [README_trace.md](README_trace.md)
 
 ## 🧑‍💻 进阶使用
 
@@ -187,7 +209,14 @@
 
 2. 下载 NDK 并解压，修改 build_arm.sh 中的 NDK_ROOT
 
-3. 编译
+3. 准备 Unicorn 静态库（`trace` 功能编译必需）
+
+   > `unicorn_lib/libunicorn.a` 体积较大（超过 GitHub 单文件 100MB 限制），不会直接随仓库分发。若缺少该文件，`go build` 会在链接阶段失败。
+
+   - 方式 A（推荐）：从发布页下载并放到 `unicorn_lib/libunicorn.a`
+   - 方式 B：自行编译 Unicorn（Android ARM64）后复制 `build/libunicorn.a` 到 `unicorn_lib/libunicorn.a`
+
+4. 编译
 
    ```shell
    git clone --recursive https://github.com/ShinoLeah/eDBG.git

@@ -3,3 +3,5 @@ bin/
 .gocache-installer/
 .VSCodeCounter/
 command
+trace_out
+unicorn_lib/libunicorn.a

@@ -20,6 +20,7 @@
 - Supports common debugging functionalities (see "Command Details")
 - Uses pwndbg-like CLI interface with GDB-style interactions for ease of use
 - File+offset based breakpoint registration enables quick startup and supports multi-thread/process debugging
+- Built-in Unicorn Trace (`trace / tr`) for ARM64 instruction-level emulation and Tenet-compatible logs
 - Supports MCP mode, giving LLMs stable dynamic-analysis capabilities with little to no need to bypass anti-debugging.
 
 ## 💕 Demo
@@ -93,6 +94,7 @@
   - `info b/break`: List breakpoints (`[+]`=enabled, `[-]`=disabled)
   - `info register/reg/r`: Show registers
   - `info thread/t`: List threads & filters
+- **Unicorn Trace** `trace/tr`: Start Unicorn emulation from current suspended state and export `uc.log` / `tenet.log`
 - **Breakpoint Management**
 
   - `enable <id>`: Enable breakpoint
@@ -101,6 +103,26 @@
 - **Repeat Command**: Press Enter with empty input
 
 More commands in "Advanced Usage".
+
+## 🧪 Unicorn Trace
+
+eDBG can launch Unicorn emulation from the current breakpoint state (registers + memory snapshot).
+
+- Command: `trace <end_addr> [output_path] [--tenet] [--bound <start> <end>]`
+- Alias: `tr`
+- Typical use: generate replayable execution logs for Tenet/IDA analysis workflows
+
+Example:
+
+```shell
+(eDBG) b libxxx.so+0x1234
+(eDBG) c
+(eDBG) trace 0x7abc5678 ./trace_out --tenet
+```
+
+For full arguments, log formats, and multi-round sync behavior:
+
+- [README_trace_en.md](README_trace_en.md)
 
 ## 🛫 Compilation
 
@@ -115,7 +137,15 @@ More commands in "Advanced Usage".
 
 2. **NDK Setup** Download NDK and modify NDK_ROOT in build_arm.sh
 
-3. **Build**
+3. **Prepare Unicorn static library** (required for `trace` build)
+
+   > `unicorn_lib/libunicorn.a` is large (over GitHub's 100MB single-file limit), so it is not shipped directly in the repository. If it is missing, `go build` will fail at link time.
+
+   - Option A (recommended): download ARM64 `libunicorn.a` from the release page and place it at `unicorn_lib/libunicorn.a`
+     - `https://github.com/chenxvb/eDBG/releases/latest`
+   - Option B: build Unicorn for Android ARM64 and copy `build/libunicorn.a` to `unicorn_lib/libunicorn.a`
+
+4. **Build**
 
    ```shell
    git clone --recursive https://github.com/ShinoLeah/eDBG.git
