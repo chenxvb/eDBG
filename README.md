@@ -14,6 +14,8 @@
 >
 > 相比于传统的基于 ptrace 的调试器方案，eDBG 不直接侵入或附加程序，具有较强的抗干扰和反检测能力。
 
+> ⚠️ 本仓库是 **Unicorn trace dump 增强/修改版本** 的 eDBG，重点面向 Unicorn Trace、Tenet 日志与 dump 回放分析链路。
+
 ## ✨ 特性
 
 - 基于 eBPF 实现，基本无视反调试。
@@ -27,6 +29,17 @@
 
 ![](demo.png)
 
+### Unicorn Trace Dump
+
+![](pics/use1.gif)
+
+### Tenet
+
+![](pics/use2_15.gif)
+
+### Tenet 内存监控
+
+![](pics/_fps30.gif)
 ## 🚀 运行环境
 
 - 目前仅支持 ARM64 架构的 Android 系统，需要 ROOT 权限，推荐搭配 [KernelSU](https://github.com/tiann/KernelSU) 使用
@@ -105,6 +118,15 @@
 更多命令见“进阶使用”
 
 ## 🧪 Unicorn Trace
+### 1. 全流程演示（Example）
+
+![](pics/use1.gif)
+
+### 2. Tenet 内存断点演示
+
+下面这个演示展示了结合 Tenet 的内存断点效果：
+
+![](pics/_fps30.gif)
 
 eDBG 支持在断点停住后，基于当前寄存器和内存状态启动 Unicorn 引擎做指令级模拟执行。
 
@@ -117,7 +139,7 @@ eDBG 支持在断点停住后，基于当前寄存器和内存状态启动 Unico
 ```shell
 (eDBG) b libxxx.so+0x1234
 (eDBG) c
-(eDBG) trace 0x7abc5678 ./trace_out --tenet
+(eDBG) trace libxxx.so+0x4321 ./trace_out --tenet
 ```
 
 完整参数、输出格式与多轮同步机制说明见：
@@ -219,7 +241,7 @@ eDBG 支持在断点停住后，基于当前寄存器和内存状态启动 Unico
 4. 编译
 
    ```shell
-   git clone --recursive https://github.com/ShinoLeah/eDBG.git
+   git clone --recursive https://github.com/chenxvb/eDBG/releases/latest
    ./build_env.sh
    ./build_arm.sh
    ```

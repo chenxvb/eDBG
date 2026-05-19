@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -91,9 +92,27 @@ func isWReg(arg arm64asm.Arg) bool {
 	return len(s) > 0 && (s[0] == 'W' || s[0] == 'w')
 }
 
+// normalizeUcRegName converts arm64asm register strings to names used by UcRegMap.
+// Unicorn map tracks X registers, so Wn is normalized to Xn.
+func normalizeUcRegName(name string) string {
+	s := strings.ToLower(name)
+	if s == "sp" || s == "wsp" {
+		return "sp"
+	}
+	if s == "xzr" || s == "wzr" {
+		return s
+	}
+	if len(s) > 1 && s[0] == 'w' {
+		if n, err := strconv.Atoi(s[1:]); err == nil && n >= 0 && n <= 30 {
+			return fmt.Sprintf("x%d", n)
+		}
+	}
+	return s
+}
+
 // regSPString converts an arm64asm.RegSP to the lowercase register name used in UcRegMap.
 func regSPString(r arm64asm.RegSP) string {
-	s := strings.ToLower(arm64asm.Reg(r).String())
+	s := normalizeUcRegName(arm64asm.Reg(r).String())
 	if s == "xzr" || s == "wzr" {
 		return "sp"
 	}
@@ -102,11 +121,7 @@ func regSPString(r arm64asm.RegSP) string {
 
 // regString converts an arm64asm.Reg to the lowercase register name used in UcRegMap.
 func regString(r arm64asm.Reg) string {
-	s := strings.ToLower(r.String())
-	if s == "xzr" || s == "wzr" {
-		return s
-	}
-	return s
+	return normalizeUcRegName(r.String())
 }
 
 // resolveMemAddr finds the MemImmediate / MemExtend argument and computes effective address.
@@ -200,7 +215,7 @@ func readRegArg(arg arm64asm.Arg, readReg regReader) uint64 {
 	if arg == nil {
 		return 0
 	}
-	s := strings.ToLower(arg.String())
+	s := normalizeUcRegName(arg.String())
 	if s == "xzr" || s == "wzr" {
 		return 0
 	}
@@ -238,7 +253,7 @@ func formatUserLogLine(addr uint64, inst arm64asm.Inst, readReg regReader) strin
 		}
 		switch a := arg.(type) {
 		case arm64asm.Reg:
-			s := strings.ToLower(a.String())
+			s := normalizeUcRegName(a.String())
 			if s == "xzr" || s == "wzr" {
 				valParts = append(valParts, "0x0")
 			} else {

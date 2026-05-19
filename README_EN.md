@@ -14,6 +14,8 @@
 >
 > Compared to traditional ptrace-based debuggers, eDBG doesn't directly intrude or attach to processes, offering stronger resistance to interference and anti-detection capabilities.
 
+> ⚠️ This repository is a **Unicorn trace dump enhanced/modified build** of eDBG, focused on Unicorn Trace, Tenet logs, and dump-replay analysis workflows.
+
 ## ✨ Features
 
 - eBPF implementation introduces minimal footprint, making it almost impossible to be detected by target programs
@@ -26,6 +28,20 @@
 ## 💕 Demo
 
 ![](demo.png)
+
+### Unicorn Trace Dump
+
+![](pics/use1.gif)
+
+### Tenet
+
+![](pics/use2_15.gif)
+
+### Tenet Memory Monitoring
+
+The demo below shows Tenet memory breakpoint behavior:
+
+![](pics/_fps30.gif)
 
 ## 🚀 Requirements
 
@@ -106,6 +122,16 @@ More commands in "Advanced Usage".
 
 ## 🧪 Unicorn Trace
 
+### 1. Full Workflow Demo (Example)
+
+![](pics/use1.gif)
+
+### 2. Tenet Memory Breakpoint Demo
+
+The demo below shows Tenet memory breakpoint behavior:
+
+![](pics/_fps30.gif)
+
 eDBG can launch Unicorn emulation from the current breakpoint state (registers + memory snapshot).
 
 - Command: `trace <end_addr> [output_path] [--tenet] [--bound <start> <end>]`
@@ -117,7 +143,7 @@ Example:
 ```shell
 (eDBG) b libxxx.so+0x1234
 (eDBG) c
-(eDBG) trace 0x7abc5678 ./trace_out --tenet
+(eDBG) trace libxxx.so+0x4321 ./trace_out --tenet
 ```
 
 For full arguments, log formats, and multi-round sync behavior:
@@ -148,7 +174,7 @@ For full arguments, log formats, and multi-round sync behavior:
 4. **Build**
 
    ```shell
-   git clone --recursive https://github.com/ShinoLeah/eDBG.git
+   git clone --recursive https://github.com/chenxvb/eDBG/releases/latest
    ./build_env.sh
    ./build_arm.sh
    ```
