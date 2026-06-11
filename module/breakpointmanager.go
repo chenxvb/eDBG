@@ -65,11 +65,16 @@ func (this *BreakPointManager) SetTempBreak(address *controller.Address, tid uin
 		}
 	}
 
+	breakPid := this.process.WorkPid
+	if tid != 0 {
+		breakPid = tid
+	}
+
 	brk := &BreakPoint{
 		Addr:    address,
 		Enable:  true,
 		Deleted: false,
-		Pid:     this.process.WorkPid,
+		Pid:     breakPid,
 		Type:    config.HW_BREAKPOINT_X,
 	}
 
@@ -100,6 +105,11 @@ func (this *BreakPointManager) SetTempBreak(address *controller.Address, tid uin
 
 	this.TempBreakTid = tid
 	this.temporaryBreakPoint = append(this.temporaryBreakPoint, brk)
+	if brk.Hardware {
+		fmt.Printf("[+] Temp hardware breakpoint at 0x%x for tid %d\n", address.Absolute, brk.Pid)
+	} else {
+		fmt.Printf("[+] Temp uprobe breakpoint at %s+0x%x for tid %d\n", address.LibInfo.LibName, address.Offset, tid)
+	}
 	return nil
 }
 

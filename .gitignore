@@ -7,3 +7,4 @@ trace_out
 unicorn_lib/libunicorn.a
 .cache
 .DS_Store
+tmp

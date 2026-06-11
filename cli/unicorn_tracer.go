@@ -24,26 +24,28 @@ const (
 // UnicornTracer wraps the Unicorn engine for ARM64 trace emulation.
 // Mirrors IDAArm64Emulator from dyn_trace_ida.py.
 type UnicornTracer struct {
-	uc           *UcEngine
-	lastRegs     map[string]uint64
-	traceLog     *os.File
-	userLog      *os.File
-	runRange     [2]uint64
-	mapRange     [][2]uint64
-	loadedFiles  map[string]bool
-	heapBase     uint64
-	heapSize     uint64
-	heapPtr      uint64
-	lastRegDump  string
-	hookAdded    bool
+	uc          *UcEngine
+	lastRegs    map[string]uint64
+	traceLog    *os.File
+	userLog     *os.File
+	runRange    [2]uint64
+	mapRange    [][2]uint64
+	loadedFiles map[string]bool
+	heapBase    uint64
+	heapSize    uint64
+	heapPtr     uint64
+	lastRegDump string
+	hookAdded   bool
 
 	// HaltReason is set by the code hook when it needs to stop emulation.
-	haltReason string
+	haltReason   string
+	lastCodeAddr uint64
+	lastCodeSize uint32
 
 	// TPIDR support
-	tpidrValue       uint64
-	tpidrDetected    bool
-	tpidrMRSDestReg  int // destination register index for MRS tpidr_el0
+	tpidrValue      uint64
+	tpidrDetected   bool
+	tpidrMRSDestReg int // destination register index for MRS tpidr_el0
 }
 
 func NewUnicornTracer() (*UnicornTracer, error) {
@@ -207,12 +209,13 @@ func (t *UnicornTracer) LoadMemoryMappings(dumpPath string) error {
 			memEnd = lowerBound
 		}
 
-		memSize := memEnd - memBase
-		if memSize <= 0 {
-			fmt.Printf("continue: map file %s 0x%x 0x%x 0x%x, bound (0x%x - 0x%x)\n",
-				m.filename, memBase, memEnd, memSize, upperBound, lowerBound)
+		if memBase >= memEnd {
+			fmt.Printf("skip overlapped map file %s 0x%x 0x%x, bound (0x%x - 0x%x)\n",
+				m.filename, memBase, memEnd, upperBound, lowerBound)
 			continue
 		}
+
+		memSize := memEnd - memBase
 		if memSize&0xfff != 0 {
 			memSize = (memSize & 0xfffffffffffff000) + 0x1000
 		}
@@ -390,6 +393,8 @@ func (t *UnicornTracer) debugHookCode(addr uint64, size uint32) {
 		t.uc.EmuStop()
 		return
 	}
+	t.lastCodeAddr = addr
+	t.lastCodeSize = size
 
 	// Check for special instructions (AUTIASP, SVC, MRS TPIDR)
 	code, err := t.uc.MemRead(addr, 4)

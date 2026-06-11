@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,9 @@ func (this *Client) HandleTrace(args []string) {
 
 	fmt.Printf("[+] Trace target: 0x%x\n", endAddr)
 	fmt.Printf("[+] Bound range : 0x%x - 0x%x\n", boundStart, boundEnd)
+	if traceBase, libName, err := this.traceBaseForAddress(boundStart); err == nil {
+		fmt.Printf("[+] Base        : 0x%x (%s)\n", traceBase, libName)
+	}
 	fmt.Printf("[+] Output path : %s\n", outputPath)
 	fmt.Printf("[+] Tenet       : %v\n", enableTenet)
 
@@ -126,10 +130,15 @@ func (this *Client) runTrace(endAddr uint64, outputPath string, enableTenet bool
 		registers["run_start"] = fmt.Sprintf("0x%x", boundStart)
 		registers["run_end"] = fmt.Sprintf("0x%x", boundEnd)
 		registers["resolved_end_addr"] = fmt.Sprintf("0x%x", endAddr)
+		if traceBase, libName, err := this.traceBaseForAddress(boundStart); err == nil {
+			registers["base"] = fmt.Sprintf("0x%x", traceBase)
+			registers["library"] = libName
+			registers["mapping_base"] = fmt.Sprintf("0x%x", boundStart)
+			registers["resolved_end_offset"] = fmt.Sprintf("0x%x", endAddr-traceBase)
+		}
 
 		regsPath := filepath.Join(dumpPath, "regs.json")
-		regsData, _ := json.MarshalIndent(registers, "", "  ")
-		os.WriteFile(regsPath, regsData, 0644)
+		this.writeSortedRegsJSON(regsPath, registers)
 		fmt.Println("[+] Registers saved to", regsPath)
 
 		tracer, err := NewUnicornTracer()
@@ -175,6 +184,8 @@ func (this *Client) runTrace(endAddr uint64, outputPath string, enableTenet bool
 		finalPC := tracer.GetPC()
 		haltReason := tracer.haltReason
 		finalLR := tracer.GetLR()
+		lastCodeAddr := tracer.lastCodeAddr
+		lastCodeSize := tracer.lastCodeSize
 
 		// Append round logs to combined logs
 		appendFileContents(totalLog, filepath.Join(dumpPath, "uc.log"))
@@ -187,7 +198,7 @@ func (this *Client) runTrace(endAddr uint64, outputPath string, enableTenet bool
 		switch resultCode {
 		case TraceResultRestart:
 			fmt.Println("[+] Out-of-range, syncing with live debugger...")
-			if !this.traceSyncAndContinue(finalPC, finalLR, haltReason) {
+			if !this.traceSyncAndContinue(finalPC, finalLR, haltReason, lastCodeAddr, lastCodeSize) {
 				fmt.Println("[!] Failed to sync with debugger, stopping trace")
 				return
 			}
@@ -235,6 +246,82 @@ func (this *Client) collectRegisterState() map[string]string {
 	registers["pc"] = fmt.Sprintf("0x%x", ctx.PC)
 
 	return registers
+}
+
+func (this *Client) traceBaseForAddress(addr uint64) (uint64, string, error) {
+	parsed, err := this.Process.ParseAddress(addr)
+	if err != nil {
+		return 0, "", err
+	}
+	if parsed.Absolute == 0 {
+		parsed.Absolute = addr
+	}
+	if parsed.Offset > parsed.Absolute {
+		return 0, "", fmt.Errorf("bad offset 0x%x for address 0x%x", parsed.Offset, parsed.Absolute)
+	}
+	libName := ""
+	if parsed.LibInfo != nil {
+		libName = parsed.LibInfo.LibName
+	}
+	return parsed.Absolute - parsed.Offset, libName, nil
+}
+
+func (this *Client) writeSortedRegsJSON(path string, regs map[string]string) {
+	data := sortedRegsJSON(regs)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		fmt.Printf("[!] Failed to write regs.json: %v\n", err)
+	}
+}
+
+func sortedRegsJSON(regs map[string]string) []byte {
+	preferred := []string{
+		"library",
+		"base",
+		"mapping_base",
+		"run_start",
+		"run_end",
+		"resolved_end_addr",
+		"resolved_end_offset",
+	}
+	for i := 0; i < 31; i++ {
+		preferred = append(preferred, fmt.Sprintf("x%d", i))
+	}
+	preferred = append(preferred, "sp", "pc", "tpidr")
+
+	seen := make(map[string]bool, len(regs))
+	var keys []string
+	for _, key := range preferred {
+		if _, ok := regs[key]; ok {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+
+	var rest []string
+	for key := range regs {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	keys = append(keys, rest...)
+
+	var b strings.Builder
+	b.WriteString("{\n")
+	for i, key := range keys {
+		encodedKey, _ := json.Marshal(key)
+		encodedValue, _ := json.Marshal(regs[key])
+		b.WriteString("  ")
+		b.Write(encodedKey)
+		b.WriteString(": ")
+		b.Write(encodedValue)
+		if i != len(keys)-1 {
+			b.WriteString(",")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("}")
+	return []byte(b.String())
 }
 
 func (this *Client) collectAutoRange() (uint64, uint64) {
@@ -501,26 +588,32 @@ func (this *Client) saveTpidrToRegs(regsPath string, tpidrVal uint64) {
 	if err != nil {
 		return
 	}
-	var regs map[string]interface{}
+	var regs map[string]string
 	if err := json.Unmarshal(data, &regs); err != nil {
 		return
 	}
 	regs["tpidr"] = fmt.Sprintf("0x%x", tpidrVal)
-	newData, _ := json.MarshalIndent(regs, "", "  ")
-	os.WriteFile(regsPath, newData, 0644)
+	this.writeSortedRegsJSON(regsPath, regs)
 }
 
-func (this *Client) traceSyncAndContinue(ucPC, ucLR uint64, haltReason string) bool {
+func (this *Client) traceSyncAndContinue(ucPC, ucLR uint64, haltReason string, lastCodeAddr uint64, lastCodeSize uint32) bool {
 	var targetAddr uint64
-	if haltReason != "" && strings.Contains(haltReason, "Except AUTIASP") {
+	syncReason := "lr"
+
+	if resume, ok := this.traceResumeAfterOutOfRangeCall(lastCodeAddr, lastCodeSize); ok {
+		targetAddr = resume
+		syncReason = "call-site-next"
+	} else if haltReason != "" && strings.Contains(haltReason, "Except AUTIASP") {
 		targetAddr = ucPC + 4
+		syncReason = "skip-autiasp"
 	} else if haltReason != "" && strings.Contains(haltReason, "Except SVC") {
 		targetAddr = ucPC + 4
+		syncReason = "skip-svc"
 	} else {
 		targetAddr = ucLR
 	}
 
-	fmt.Printf("[+] Running debugger to 0x%x (PC=0x%x, LR=0x%x)\n", targetAddr, ucPC, ucLR)
+	fmt.Printf("[+] Running debugger to 0x%x (%s, PC=0x%x, LR=0x%x, last=0x%x)\n", targetAddr, syncReason, ucPC, ucLR, lastCodeAddr)
 
 	address, err := this.Process.ParseAddress(targetAddr)
 	if err != nil {
@@ -547,6 +640,28 @@ func (this *Client) traceSyncAndContinue(ucPC, ucLR uint64, haltReason string) b
 
 	fmt.Printf("[+] Debugger stopped at 0x%x\n", this.Process.Context.PC)
 	return true
+}
+
+func (this *Client) traceResumeAfterOutOfRangeCall(lastCodeAddr uint64, lastCodeSize uint32) (uint64, bool) {
+	if lastCodeAddr == 0 {
+		return 0, false
+	}
+
+	code := make([]byte, 4)
+	if _, err := utils.ReadProcessMemory(this.Process.WorkPid, uintptr(lastCodeAddr), code); err != nil {
+		return 0, false
+	}
+	inst, err := arm64asm.Decode(code)
+	if err != nil {
+		return 0, false
+	}
+	if inst.Op != arm64asm.BL && inst.Op != arm64asm.BLR {
+		return 0, false
+	}
+	if lastCodeSize == 0 {
+		lastCodeSize = 4
+	}
+	return lastCodeAddr + uint64(lastCodeSize), true
 }
 
 func appendFileContents(dst *os.File, srcPath string) {
