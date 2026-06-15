@@ -116,9 +116,26 @@ func (this *EventListener) PassEvent(IsHardware bool) {
 	if IsHardware {
 		<-this.Record // 舍弃这个 Sample
 	}
+	this.passEventAfterSample()
+}
+
+func (this *EventListener) passEventAfterSample() {
 	this.client.Working = false
 	this.client.NotifyContinue <- true
 }
+
+func sameBreakpointPC(pc uint64, target uint64) bool {
+	if target == 0 {
+		return true
+	}
+	if pc == target {
+		return true
+	}
+	// Uprobe and perf samples may report the trapped PC either at the probed
+	// instruction or at the following instruction depending on the source.
+	return pc+4 == target || pc == target+4
+}
+
 func (this *EventListener) WorkEvent(data []byte) {
 	if this.client == nil || this.client.Process == nil {
 		return
@@ -137,33 +154,33 @@ func (this *EventListener) WorkEvent(data []byte) {
 	this.pid = bo.Uint32(data[4:8])
 	nowTid := bo.Uint32(data[12+8*34 : 16+8*34])
 	PC := bo.Uint64(data[12+8*32 : 12+8*33])
+	isHardware := PC == 0xFFFFFFFF
+	eventData := data
+	if isHardware {
+		dataRaw := <-this.Record
+		eventData = dataRaw.RawSample[12:]
+		if len(eventData) >= 12+8*33 {
+			PC = bo.Uint64(eventData[12+8*32 : 12+8*33])
+		}
+	}
 
 	for _, ablepid := range process.PidList {
 		if this.pid == ablepid {
 			process.WorkPid = this.pid
 			process.StoppedPID(this.pid)
-			if this.client.BrkManager.TempBreakTid != 0 {
-				// 临时断点判断线程 ID
-				if PC == 0xFFFFFFFF {
-					if nowTid == this.client.BrkManager.TempBreakTid {
-						process.WorkTid = nowTid
-						if PC == 0xFFFFFFFF {
-							dataRaw := <-this.Record
-							this.Incomingdata <- dataRaw.RawSample[12:]
-						} else {
-							this.Incomingdata <- data
-						}
-
-						this.client.DoClean <- true
-						return
-					}
-					// 单步调试断点被其他线程命中
-					// 这里默认了如果存在单步调试断点那么下一个触发的一定是单步调试断点
-					// 如果硬件断点失效会出错
-					// fmt.Println("PASSED: SingleStep")
-					this.PassEvent(PC == 0xFFFFFFFF)
+			if this.client.BrkManager.TempBreakActive {
+				if this.client.BrkManager.TempBreakTid != 0 && nowTid != this.client.BrkManager.TempBreakTid {
+					this.passEventAfterSample()
 					return
 				}
+				if !sameBreakpointPC(PC, this.client.BrkManager.TempBreakAddress) {
+					this.passEventAfterSample()
+					return
+				}
+				process.WorkTid = nowTid
+				this.Incomingdata <- eventData
+				this.client.DoClean <- true
+				return
 			}
 
 			valid := false
@@ -175,12 +192,7 @@ func (this *EventListener) WorkEvent(data []byte) {
 					valid = true
 					if nowTid == t.Thread.Tid {
 						process.WorkTid = nowTid
-						if PC == 0xFFFFFFFF {
-							dataRaw := <-this.Record
-							this.Incomingdata <- dataRaw.RawSample[12:]
-						} else {
-							this.Incomingdata <- data
-						}
+						this.Incomingdata <- eventData
 						this.client.DoClean <- true
 						return
 					}
@@ -201,12 +213,7 @@ func (this *EventListener) WorkEvent(data []byte) {
 							if tInfo.Tid == nowTid {
 								process.WorkTid = nowTid
 								process.StoppedPID(this.pid)
-								if PC == 0xFFFFFFFF {
-									dataRaw := <-this.Record
-									this.Incomingdata <- dataRaw.RawSample[12:]
-								} else {
-									this.Incomingdata <- data
-								}
+								this.Incomingdata <- eventData
 								this.client.DoClean <- true
 								return
 							}
@@ -222,23 +229,18 @@ func (this *EventListener) WorkEvent(data []byte) {
 				// 没有可用的线程过滤器，按照 pid 工作
 				process.WorkTid = nowTid
 				process.StoppedPID(this.pid)
-				if PC == 0xFFFFFFFF {
-					dataRaw := <-this.Record
-					this.Incomingdata <- dataRaw.RawSample[12:]
-				} else {
-					this.Incomingdata <- data
-				}
+				this.Incomingdata <- eventData
 				this.client.DoClean <- true
 				return
 			}
 			// fmt.Println("PASSED: PID ABLE BUT FILTERED BY THREAD")
-			this.PassEvent(PC == 0xFFFFFFFF)
+			this.passEventAfterSample()
 			// 目标 PID，在确认 Event 清空后 Continue
 			return
 		}
 	}
 	// 无关 PID 直接 Continue
 	// fmt.Println("PASSED: Unrelated PID")
-	this.PassEvent(PC == 0xFFFFFFFF)
+	this.passEventAfterSample()
 	syscall.Kill(int(this.pid), syscall.SIGCONT)
 }

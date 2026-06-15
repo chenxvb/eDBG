@@ -29,6 +29,8 @@ type BreakPointManager struct {
 	temporaryBreakPoint []*BreakPoint
 	ProbeHandler        *ProbeHandler
 	TempBreakTid        uint32
+	TempBreakAddress    uint64
+	TempBreakActive     bool
 	Running             bool
 }
 
@@ -47,7 +49,7 @@ func (this *BreakPointManager) SetProcess(process *controller.Process) {
 func (this *BreakPointManager) Reset() {
 	this.BreakPoints = nil
 	this.temporaryBreakPoint = nil
-	this.TempBreakTid = 0
+	this.ClearTempBreakTarget()
 	this.Running = false
 }
 
@@ -59,8 +61,12 @@ func (this *BreakPointManager) SetTempBreak(address *controller.Address, tid uin
 	if checkOffset(address.Offset) == false {
 		return fmt.Errorf("Invalid address: %x", address.Offset)
 	}
+	this.TempBreakTid = tid
+	this.TempBreakAddress = address.Absolute
+	this.TempBreakActive = true
 	for _, brk := range this.BreakPoints {
 		if controller.Equals(brk.Addr, address) && brk.Enable == true {
+			fmt.Printf("[+] Reusing breakpoint at 0x%x as temp target for tid %d\n", address.Absolute, tid)
 			return nil
 		}
 	}
@@ -89,8 +95,8 @@ func (this *BreakPointManager) SetTempBreak(address *controller.Address, tid uin
 	case config.PREFER_PERF:
 		safe, err := utils.SafeAddress(this.process.WorkPid, address.Absolute)
 		if err != nil {
-			fmt.Printf("Failed parse current addr: %v\n", address.Absolute, err)
-			brk.Hardware = false
+			fmt.Printf("Failed parse current addr 0x%x: %v\n", address.Absolute, err)
+			brk.Hardware = true
 			break
 		}
 		if !safe {
@@ -103,7 +109,6 @@ func (this *BreakPointManager) SetTempBreak(address *controller.Address, tid uin
 		}
 	}
 
-	this.TempBreakTid = tid
 	this.temporaryBreakPoint = append(this.temporaryBreakPoint, brk)
 	if brk.Hardware {
 		fmt.Printf("[+] Temp hardware breakpoint at 0x%x for tid %d\n", address.Absolute, brk.Pid)
@@ -177,12 +182,15 @@ func (this *BreakPointManager) ClearTempBreak() {
 	this.temporaryBreakPoint = []*BreakPoint{}
 }
 
+func (this *BreakPointManager) ClearTempBreakTarget() {
+	this.TempBreakTid = 0
+	this.TempBreakAddress = 0
+	this.TempBreakActive = false
+}
+
 func (this *BreakPointManager) SetupProbe() error {
 	if this.Running {
 		return fmt.Errorf("Probes are running now.")
-	}
-	if len(this.temporaryBreakPoint) == 0 {
-		this.TempBreakTid = 0
 	}
 	err := this.ProbeHandler.SetupManager(append(this.temporaryBreakPoint, this.BreakPoints...))
 	if err != nil {
@@ -216,6 +224,7 @@ func (this *BreakPointManager) Stop() error {
 	err := this.ProbeHandler.Stop()
 	if err == nil {
 		this.Running = false
+		this.ClearTempBreakTarget()
 	}
 	return err
 }

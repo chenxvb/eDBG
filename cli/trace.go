@@ -17,6 +17,7 @@ import (
 const (
 	DumpSingleSegSize = 0x4000
 	RoundMax          = 1000
+	TraceSyncTimeout  = 200 * time.Second
 )
 
 func (this *Client) HandleTrace(args []string) {
@@ -114,7 +115,7 @@ func (this *Client) runTrace(endAddr uint64, outputPath string, enableTenet bool
 	for dumpRound := 0; dumpRound < RoundMax; dumpRound++ {
 		fmt.Printf("\n[+] ===== Round %d =====\n", dumpRound)
 
-		roundTS := strconv.FormatInt(time.Now().Unix(), 10)
+		roundTS := strconv.FormatInt(time.Now().UnixNano(), 10)
 		dumpPath := filepath.Join(outputPath, fmt.Sprintf("dump_%s", roundTS))
 		os.MkdirAll(dumpPath, 0755)
 
@@ -564,7 +565,7 @@ func (this *Client) autoGetTpidr(tracer *UnicornTracer) uint64 {
 		return 0
 	}
 
-	_, err = this.WaitForStopAfter(seq, 120*time.Second)
+	_, err = this.WaitForStopAfter(seq, TraceSyncTimeout)
 	if err != nil {
 		fmt.Printf("[!] Timeout waiting for debugger: %v\n", err)
 		return 0
@@ -603,6 +604,9 @@ func (this *Client) traceSyncAndContinue(ucPC, ucLR uint64, haltReason string, l
 	if resume, ok := this.traceResumeAfterOutOfRangeCall(lastCodeAddr, lastCodeSize); ok {
 		targetAddr = resume
 		syncReason = "call-site-next"
+	} else if resume, ok := this.traceResumeBeforeInvalidReturn(ucLR, lastCodeAddr); ok {
+		targetAddr = resume
+		syncReason = "ret-refresh"
 	} else if haltReason != "" && strings.Contains(haltReason, "Except AUTIASP") {
 		targetAddr = ucPC + 4
 		syncReason = "skip-autiasp"
@@ -611,6 +615,11 @@ func (this *Client) traceSyncAndContinue(ucPC, ucLR uint64, haltReason string, l
 		syncReason = "skip-svc"
 	} else {
 		targetAddr = ucLR
+	}
+
+	if !this.traceCanBreakAt(targetAddr) {
+		fmt.Printf("[!] Refusing to sync to non-code target 0x%x (%s, PC=0x%x, LR=0x%x, last=0x%x)\n", targetAddr, syncReason, ucPC, ucLR, lastCodeAddr)
+		return false
 	}
 
 	fmt.Printf("[+] Running debugger to 0x%x (%s, PC=0x%x, LR=0x%x, last=0x%x)\n", targetAddr, syncReason, ucPC, ucLR, lastCodeAddr)
@@ -632,13 +641,47 @@ func (this *Client) traceSyncAndContinue(ucPC, ucLR uint64, haltReason string, l
 		return false
 	}
 
-	_, err = this.WaitForStopAfter(seq, 120*time.Second)
+	_, err = this.WaitForStopAfter(seq, TraceSyncTimeout)
 	if err != nil {
 		fmt.Printf("[!] Timeout waiting for debugger: %v\n", err)
 		return false
 	}
 
 	fmt.Printf("[+] Debugger stopped at 0x%x\n", this.Process.Context.PC)
+	return true
+}
+
+func (this *Client) traceResumeBeforeInvalidReturn(ucLR uint64, lastCodeAddr uint64) (uint64, bool) {
+	if lastCodeAddr == 0 || this.traceCanBreakAt(ucLR) {
+		return 0, false
+	}
+
+	code := make([]byte, 4)
+	if _, err := utils.ReadProcessMemory(this.Process.WorkPid, uintptr(lastCodeAddr), code); err != nil {
+		return 0, false
+	}
+	inst, err := arm64asm.Decode(code)
+	if err != nil || inst.Op != arm64asm.RET {
+		return 0, false
+	}
+	if !this.traceCanBreakAt(lastCodeAddr) {
+		return 0, false
+	}
+	fmt.Printf("[!] LR target 0x%x is not executable; syncing to RET at 0x%x to refresh real LR\n", ucLR, lastCodeAddr)
+	return lastCodeAddr, true
+}
+
+func (this *Client) traceCanBreakAt(addr uint64) bool {
+	address, err := this.Process.ParseAddress(addr)
+	if err != nil || address == nil || address.IsAnouymous() {
+		return false
+	}
+	if !strings.Contains(address.Permission, "x") {
+		return false
+	}
+	if _, err := utils.SafeAddress(this.Process.WorkPid, addr); err != nil {
+		return false
+	}
 	return true
 }
 

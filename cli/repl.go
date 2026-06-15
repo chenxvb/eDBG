@@ -900,6 +900,7 @@ func (this *Client) HandleContinue() bool {
 	if err != nil {
 		fmt.Printf("Failed to Continue: %v\n", err)
 		this.BrkManager.ClearTempBreak()
+		this.BrkManager.ClearTempBreakTarget()
 		// this.CleanUp()
 		fmt.Println("Possible reasons:\n\n1. Some instructions do not support uprobe. Try setting breakpoints on other instructions or use until to skip the current instruction.\n2. Breakpoints with invalid addresses exist. Check the breakpoint list.\n")
 		return false

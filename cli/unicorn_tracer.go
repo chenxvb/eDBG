@@ -148,6 +148,9 @@ func (t *UnicornTracer) LoadMemoryMappings(dumpPath string) error {
 	type mapEntry struct {
 		base, end, size uint64
 		filename        string
+		writeBase       uint64
+		writeEnd        uint64
+		hasWrite        bool
 	}
 	var mapList []mapEntry
 
@@ -161,7 +164,7 @@ func (t *UnicornTracer) LoadMemoryMappings(dumpPath string) error {
 		fmt.Sscanf(match[1], "%x", &base)
 		fmt.Sscanf(match[2], "%x", &end)
 		fmt.Sscanf(match[3], "%x", &size)
-		mapList = append(mapList, mapEntry{base, end, size, name})
+		mapList = append(mapList, mapEntry{base: base, end: end, size: size, filename: name})
 	}
 
 	sort.Slice(mapList, func(i, j int) bool { return mapList[i].base < mapList[j].base })
@@ -179,7 +182,7 @@ func (t *UnicornTracer) LoadMemoryMappings(dumpPath string) error {
 	t.mapRange = merged
 
 	// Map memory regions (avoid overlap with existing mappings)
-	for _, m := range mapList {
+	for i, m := range mapList {
 		if t.loadedFiles[m.filename] {
 			continue
 		}
@@ -228,6 +231,9 @@ func (t *UnicornTracer) LoadMemoryMappings(dumpPath string) error {
 			fmt.Printf("[!] mem_map failed for 0x%x size 0x%x: %v\n", memBase, memSize, err)
 			continue
 		}
+		mapList[i].writeBase = memBase
+		mapList[i].writeEnd = memEnd
+		mapList[i].hasWrite = true
 		t.mapRange = append(t.mapRange, [2]uint64{memBase, memEnd})
 	}
 
@@ -236,14 +242,33 @@ func (t *UnicornTracer) LoadMemoryMappings(dumpPath string) error {
 		if t.loadedFiles[m.filename] {
 			continue
 		}
+		if !m.hasWrite {
+			continue
+		}
+
 		filePath := filepath.Join(dumpPath, m.filename)
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			fmt.Printf("[!] Failed to read %s: %v\n", m.filename, err)
 			continue
 		}
-		fmt.Printf("write file %s 0x%x 0x%x 0x%x\n", m.filename, m.base, m.end, m.size)
-		if err := t.uc.MemWrite(m.base, data); err != nil {
+		writeData := data
+		writeBase := m.writeBase
+		writeEnd := m.writeEnd
+		if writeBase > m.base {
+			offset := writeBase - m.base
+			if offset >= uint64(len(writeData)) {
+				continue
+			}
+			writeData = writeData[offset:]
+		}
+		writeSize := writeEnd - writeBase
+		if uint64(len(writeData)) > writeSize {
+			writeData = writeData[:writeSize]
+		}
+
+		fmt.Printf("write file %s 0x%x 0x%x 0x%x\n", m.filename, writeBase, writeEnd, len(writeData))
+		if err := t.uc.MemWrite(writeBase, writeData); err != nil {
 			fmt.Printf("[!] mem_write failed for %s: %v\n", m.filename, err)
 		}
 		t.loadedFiles[m.filename] = true
