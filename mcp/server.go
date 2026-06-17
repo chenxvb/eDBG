@@ -331,7 +331,7 @@ func (this *Server) handleToolCall(w http.ResponseWriter, httpReq *http.Request,
 		toolResult = this.errorToolResult(params.Name, "internal_error", "tool returned no result", nil, nil, nil)
 	}
 
-	payloadText := this.mustJSON(toolResult)
+	payloadText := this.renderToolContentText(toolResult)
 	result := map[string]interface{}{
 		"structuredContent": toolResult,
 		"content": []map[string]interface{}{
@@ -1106,6 +1106,46 @@ func (this *Server) mustJSON(value interface{}) string {
 	return string(payload)
 }
 
+func (this *Server) renderToolContentText(toolResult map[string]interface{}) string {
+	var builder strings.Builder
+
+	tool := stringValue(toolResult["tool"])
+	message := stringValue(toolResult["message"])
+	ok, _ := toolResult["ok"].(bool)
+
+	builder.WriteString("eDBG MCP result\n")
+	if tool != "" {
+		fmt.Fprintf(&builder, "Tool: %s\n", tool)
+	}
+	fmt.Fprintf(&builder, "OK: %t\n", ok)
+	if message != "" {
+		fmt.Fprintf(&builder, "Message: %s\n", message)
+	}
+
+	if state, ok := toolResult["state"].(map[string]interface{}); ok {
+		fmt.Fprintf(&builder, "State: %s\n", renderStateSummary(state))
+	}
+
+	appendToolResultHighlights(&builder, toolResult)
+	appendStringListSection(&builder, "Warnings", toolResult["warnings"])
+	appendStringListSection(&builder, "Suggestions", toolResult["suggestions"])
+
+	if next, ok := toolResult["next"].(map[string]interface{}); ok {
+		builder.WriteString("Next:\n")
+		if primary := stringValue(next["primary_tool"]); primary != "" {
+			fmt.Fprintf(&builder, "- Recommended tool: %s\n", primary)
+		}
+		if reason := stringValue(next["reason"]); reason != "" {
+			fmt.Fprintf(&builder, "- Reason: %s\n", reason)
+		}
+		appendStringListLine(&builder, "- Available tools now", next["available_tools"])
+	}
+
+	builder.WriteString("\nStructured JSON:\n")
+	builder.WriteString(this.mustJSON(toolResult))
+	return strings.TrimSpace(builder.String())
+}
+
 func cleanText(text string) string {
 	text = ansiEscapePattern.ReplaceAllString(text, "")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
@@ -1118,12 +1158,14 @@ func hexUint64(value uint64) string {
 }
 
 func (this *Server) successToolResult(tool string, message string, data map[string]interface{}, warnings []string, suggestions []string) map[string]interface{} {
+	state := this.stateSnapshot()
 	result := map[string]interface{}{
 		"ok":      true,
 		"tool":    tool,
 		"message": message,
 		"data":    data,
-		"state":   this.stateSnapshot(),
+		"state":   state,
+		"next":    nextActionData(state),
 	}
 	if cleaned := cleanStringList(warnings); len(cleaned) > 0 {
 		result["warnings"] = cleaned
@@ -1135,11 +1177,13 @@ func (this *Server) successToolResult(tool string, message string, data map[stri
 }
 
 func (this *Server) errorToolResult(tool string, code string, message string, warnings []string, data map[string]interface{}, suggestions []string) map[string]interface{} {
+	state := this.stateSnapshot()
 	result := map[string]interface{}{
 		"ok":      false,
 		"tool":    tool,
 		"message": message,
-		"state":   this.stateSnapshot(),
+		"state":   state,
+		"next":    nextActionData(state),
 		"error": map[string]interface{}{
 			"code":    code,
 			"message": message,
@@ -1157,6 +1201,61 @@ func (this *Server) errorToolResult(tool string, code string, message string, wa
 	return result
 }
 
+func nextActionData(state map[string]interface{}) map[string]interface{} {
+	phase := stringValue(state["phase"])
+	processStatus := stringValue(state["process_status"])
+	enabledBreakpoints := intValue(state["enabled_breakpoint_count"])
+	unexpectedExit := boolValue(state["unexpected_exit"])
+
+	switch {
+	case phase == "idle":
+		return map[string]interface{}{
+			"primary_tool":    "attach",
+			"reason":          "No target is selected yet. Select the package and library before setting breakpoints.",
+			"available_tools": []string{"status", "attach"},
+		}
+	case phase == "attached" && enabledBreakpoints == 0:
+		return map[string]interface{}{
+			"primary_tool":    "break",
+			"reason":          "The target is attached but no enabled breakpoint exists. Add a virtual-offset breakpoint before run.",
+			"available_tools": []string{"status", "break", "info_break", "info_file", "quit"},
+		}
+	case phase == "attached":
+		return map[string]interface{}{
+			"primary_tool":    "run",
+			"reason":          "The target has at least one enabled breakpoint. Run will arm probes, launch the app, and wait for the first stop.",
+			"available_tools": []string{"status", "run", "break", "info_break", "info_file", "quit"},
+		}
+	case phase == "running" && (processStatus == "exited" || unexpectedExit):
+		return map[string]interface{}{
+			"primary_tool":    "cancel_run",
+			"reason":          "The target appears to have exited while eDBG was waiting. Return to standby before retrying.",
+			"available_tools": []string{"status", "cancel_run", "quit"},
+		}
+	case phase == "running":
+		return map[string]interface{}{
+			"primary_tool":    "wait_stop",
+			"reason":          "The target is running under probes. Continue waiting for a breakpoint, or cancel the current run.",
+			"available_tools": []string{"status", "wait_stop", "cancel_run", "quit"},
+		}
+	case phase == "stopped":
+		return map[string]interface{}{
+			"primary_tool": "info_register",
+			"reason":       "The target is stopped on a breakpoint. Inspect registers, memory, disassembly, or stack before continuing.",
+			"available_tools": []string{
+				"status", "info_register", "info_thread", "examine", "list", "backtrace",
+				"thread", "set_symbol", "write_memory", "dump", "continue", "quit",
+			},
+		}
+	default:
+		return map[string]interface{}{
+			"primary_tool":    "status",
+			"reason":          "The current state is not recognized by the next-step helper. Query status before choosing a debug action.",
+			"available_tools": []string{"status"},
+		}
+	}
+}
+
 func (this *Server) wrapToolError(tool string, code string, message string, warnings []string, suggestions []string) map[string]interface{} {
 	return this.errorToolResult(tool, code, cleanText(message), warnings, nil, suggestions)
 }
@@ -1171,6 +1270,112 @@ func cleanStringList(values []string) []string {
 		cleaned = append(cleaned, value)
 	}
 	return cleaned
+}
+
+func renderStateSummary(state map[string]interface{}) string {
+	parts := []string{}
+	if phase := stringValue(state["phase"]); phase != "" {
+		parts = append(parts, "phase="+phase)
+	}
+	parts = append(parts, fmt.Sprintf("target_selected=%t", boolValue(state["target_selected"])))
+	parts = append(parts, fmt.Sprintf("stopped=%t", boolValue(state["stopped"])))
+	parts = append(parts, fmt.Sprintf("run_issued=%t", boolValue(state["run_issued"])))
+	parts = append(parts, fmt.Sprintf("enabled_breakpoints=%d", intValue(state["enabled_breakpoint_count"])))
+	if pkg := stringValue(state["package"]); pkg != "" {
+		parts = append(parts, "package="+pkg)
+	}
+	if lib := stringValue(state["library"]); lib != "" {
+		parts = append(parts, "library="+lib)
+	}
+	if status := stringValue(state["process_status"]); status != "" {
+		parts = append(parts, "process_status="+status)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func appendToolResultHighlights(builder *strings.Builder, toolResult map[string]interface{}) {
+	data, ok := toolResult["data"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	if text := stringValue(data["text"]); text != "" {
+		fmt.Fprintf(builder, "Output:\n%s\n", text)
+	}
+	if stop, ok := data["stop"].(map[string]interface{}); ok {
+		if text := stringValue(stop["text"]); text != "" {
+			fmt.Fprintf(builder, "Stop:\n%s\n", text)
+		}
+	}
+	if stop, ok := data["first_stop"].(map[string]interface{}); ok {
+		if text := stringValue(stop["text"]); text != "" {
+			fmt.Fprintf(builder, "First stop:\n%s\n", text)
+		}
+	}
+}
+
+func appendStringListSection(builder *strings.Builder, title string, value interface{}) {
+	items := stringListValue(value)
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(builder, "%s:\n", title)
+	for _, item := range items {
+		fmt.Fprintf(builder, "- %s\n", item)
+	}
+}
+
+func appendStringListLine(builder *strings.Builder, title string, value interface{}) {
+	items := stringListValue(value)
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(builder, "%s: %s\n", title, strings.Join(items, ", "))
+}
+
+func stringValue(value interface{}) string {
+	str, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return cleanText(str)
+}
+
+func boolValue(value interface{}) bool {
+	typed, ok := value.(bool)
+	return ok && typed
+}
+
+func intValue(value interface{}) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case uint64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func stringListValue(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return cleanStringList(typed)
+	case []interface{}:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if str := stringValue(item); str != "" {
+				items = append(items, str)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
 }
 
 func (this *Server) processRuntimeData() map[string]interface{} {
